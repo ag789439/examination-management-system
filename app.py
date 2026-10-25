@@ -52,7 +52,8 @@ def home():
     </head>
     <body>
         <header>
-            <h1>Examination Management System</h1>
+            <h1>Ayush Gupta</h1>
+            <p>Examination Management System</p>
             <p>Manage students, exams and results in one place</p>
         </header>
 
@@ -78,7 +79,7 @@ def home():
             </div>
         </div>
 
-        <footer>Examination Management System</footer>
+        <footer>Developed by Ayush Gupta | Examination Management System</footer>
     </body>
     </html>
     """)
