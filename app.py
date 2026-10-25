@@ -1,4 +1,128 @@
 
+import os
+from datetime import date
+from flask import Flask, request, redirect, url_for, render_template_string, flash
+import psycopg
+from psycopg.rows import dict_row
+
+app = Flask(__name__)
+app.secret_key = os.environ.get("SECRET_KEY", "change-this-secret")
+DATABASE_URL = os.environ.get("DATABASE_URL")
+
+
+def get_db():
+    if not DATABASE_URL:
+        raise RuntimeError("DATABASE_URL environment variable is missing")
+    return psycopg.connect(DATABASE_URL, row_factory=dict_row)
+
+
+def init_db():
+    with get_db() as conn:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS students (
+                id SERIAL PRIMARY KEY,
+                admission_no VARCHAR(50) UNIQUE NOT NULL,
+                name VARCHAR(120) NOT NULL,
+                class_name VARCHAR(30) NOT NULL,
+                roll_no VARCHAR(30) NOT NULL
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS exams (
+                id SERIAL PRIMARY KEY,
+                exam_name VARCHAR(120) NOT NULL,
+                subject VARCHAR(100) NOT NULL,
+                exam_date DATE NOT NULL,
+                max_marks NUMERIC(8,2) NOT NULL CHECK (max_marks > 0)
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS marks (
+                id SERIAL PRIMARY KEY,
+                student_id INTEGER REFERENCES students(id) ON DELETE CASCADE,
+                exam_id INTEGER REFERENCES exams(id) ON DELETE CASCADE,
+                marks_obtained NUMERIC(8,2) NOT NULL CHECK (marks_obtained >= 0),
+                UNIQUE(student_id, exam_id)
+            )
+        """)
+
+
+BASE = """
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{ title }} - Examination Management</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;font-family:Arial,sans-serif;background:#f1f5f9;color:#172033}
+nav{background:#172554;padding:18px;display:flex;gap:20px;flex-wrap:wrap}
+nav a{color:white;text-decoration:none;font-weight:bold}
+header{padding:25px;background:white}
+main{max-width:1100px;margin:25px auto;padding:15px}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:18px}
+.card,.panel{background:white;padding:22px;border-radius:12px;margin-bottom:20px;border:1px solid #e2e8f0}
+.big{font-size:30px;color:#2563eb;font-weight:bold}
+a.link{color:#2563eb;font-weight:bold}
+form{display:grid;gap:14px;max-width:600px}
+label{font-weight:bold}
+input,select{width:100%;padding:12px;margin-top:6px;border:1px solid #cbd5e1;border-radius:7px}
+button,.btn{background:#2563eb;color:white;border:0;padding:10px 15px;border-radius:7px;cursor:pointer;text-decoration:none;display:inline-block}
+.danger{background:#dc2626}
+.tablewrap{overflow-x:auto}
+table{width:100%;border-collapse:collapse}
+th,td{text-align:left;padding:11px;border-bottom:1px solid #ddd}
+th{background:#eff6ff}
+.notice{background:#dbeafe;padding:12px;margin-bottom:15px;border-radius:7px}
+.actions{display:flex;gap:8px;flex-wrap:wrap}
+</style>
+</head>
+<body>
+<nav>
+<a href="/">Dashboard</a>
+<a href="/students">Students</a>
+<a href="/exams">Exams</a>
+<a href="/marks">Marks Entry</a>
+<a href="/results">Results</a>
+</nav>
+<header><h1>{{ title }}</h1><p>Examination Management System</p></header>
+<main>
+{% for message in get_flashed_messages() %}
+<div class="notice">{{ message }}</div>
+{% endfor %}
+{{ content|safe }}
+</main>
+</body>
+</html>
+"""
+
+
+def page(title, template, **data):
+    content = render_template_string(template, **data)
+    return render_template_string(BASE, title=title, content=content)
+
+
+@app.route("/")
+def home():
+    with get_db() as conn:
+        students = conn.execute("SELECT COUNT(*) AS n FROM students").fetchone()["n"]
+        exams = conn.execute("SELECT COUNT(*) AS n FROM exams").fetchone()["n"]
+        marks = conn.execute("SELECT COUNT(*) AS n FROM marks").fetchone()["n"]
+
+    template = """
+    <div class="cards">
+      <div class="card"><h3>Total Students</h3><div class="big">{{ students }}</div>
+      <p><a class="link" href="/students">Manage Students →</a></p></div>
+      <div class="card"><h3>Total Exams</h3><div class="big">{{ exams }}</div>
+      <p><a class="link" href="/exams">Manage Exams →</a></p></div>
+      <div class="card"><h3>Marks Records</h3><div class="big">{{ marks }}</div>
+      <p><a class="link" href="/marks">Enter Marks →</a></p></div>
+      <div class="card"><h3>Results</h3><p><a class="link" href="/results">View Results →</a></p></div>
+    </div>
+    """
+    return page("Dashboard", template, students=students, exams=exams, marks=marks)
+
 
 @app.route("/students", methods=["GET", "POST"])
 def student_page():
@@ -9,90 +133,105 @@ def student_page():
             request.form.get("class_name", "").strip(),
             request.form.get("roll_no", "").strip()
         ]
-
         if not all(values):
             flash("Please fill in every field.")
         else:
             try:
                 with get_db() as conn:
                     conn.execute("""
-                        INSERT INTO students
-                        (admission_no, name, class_name, roll_no)
-                        VALUES (%s, %s, %s, %s)
+                        INSERT INTO students(admission_no,name,class_name,roll_no)
+                        VALUES (%s,%s,%s,%s)
                     """, values)
                 flash("Student added successfully.")
             except psycopg.errors.UniqueViolation:
                 flash("Admission number already exists.")
-
         return redirect(url_for("student_page"))
 
     with get_db() as conn:
-        rows = conn.execute(
-            "SELECT * FROM students ORDER BY id DESC"
-        ).fetchall()
+        rows = conn.execute("SELECT * FROM students ORDER BY id DESC").fetchall()
 
     template = """
-    <div class="panel">
-      <h2>Add Student</h2>
-      <form method="POST">
-        <label>Admission Number
-          <input name="admission_no" required>
-        </label>
-        <label>Student Name
-          <input name="name" required>
-        </label>
-        <label>Class
-          <input name="class_name" required>
-        </label>
-        <label>Roll Number
-          <input name="roll_no" required>
-        </label>
-        <button type="submit">Save Student</button>
-      </form>
-    </div>
-
-    <div class="panel">
-      <h2>Student Records</h2>
-      <div class="tablewrap">
-        <table>
-          <tr>
-            <th>ID</th>
-            <th>Admission No.</th>
-            <th>Name</th>
-            <th>Class</th>
-            <th>Roll No.</th>
-          </tr>
-          {% for s in rows %}
-          <tr>
-            <td>{{ s.id }}</td>
-            <td>{{ s.admission_no }}</td>
-            <td>{{ s.name }}</td>
-            <td>{{ s.class_name }}</td>
-            <td>{{ s.roll_no }}</td>
-          </tr>
-          {% endfor %}
-        </table>
-      </div>
-    </div>
-    """
-    return page("Student Management", template, rows=rows)
-
     <section class="panel"><h2>Add Student</h2>
     <form method="post">
       <label>Admission Number<input name="admission_no" required></label>
       <label>Student Name<input name="name" required></label>
-      <label>Class<input name="class_name" placeholder="XII-A" required></label>
+      <label>Class<input name="class_name" required></label>
       <label>Roll Number<input name="roll_no" required></label>
       <button type="submit">Save Student</button>
     </form></section>
-    <section class="panel"><h2>Student Records</h2><div class="tablewrap"><table>
-    <tr><th>Admission No.</th><th>Name</th><th>Class</th><th>Roll No.</th></tr>
-    {% for s in rows %}<tr><td>{{ s.admission_no }}</td><td>{{ s.name }}</td>
-    <td>{{ s.class_name }}</td><td>{{ s.roll_no }}</td></tr>
-    {% else %}<tr><td colspan="4">No students yet.</td></tr>{% endfor %}
+    <section class="panel"><h2>Student Records</h2>
+    <div class="tablewrap"><table>
+    <tr><th>Admission No.</th><th>Name</th><th>Class</th><th>Roll No.</th><th>Actions</th></tr>
+    {% for s in rows %}
+    <tr>
+      <td>{{ s.admission_no }}</td><td>{{ s.name }}</td>
+      <td>{{ s.class_name }}</td><td>{{ s.roll_no }}</td>
+      <td><div class="actions">
+        <a class="btn" href="{{ url_for('edit_student', student_id=s.id) }}">Edit</a>
+        <form method="post" action="{{ url_for('delete_student', student_id=s.id) }}"
+          onsubmit="return confirm('Delete this student and their marks?')">
+          <button class="danger" type="submit">Delete</button>
+        </form>
+      </div></td>
+    </tr>
+    {% else %}<tr><td colspan="5">No students yet.</td></tr>{% endfor %}
     </table></div></section>
     """
     return page("Students", template, rows=rows)
+
+
+@app.route("/students/<int:student_id>/edit", methods=["GET", "POST"])
+def edit_student(student_id):
+    with get_db() as conn:
+        student = conn.execute(
+            "SELECT * FROM students WHERE id=%s", (student_id,)
+        ).fetchone()
+
+        if not student:
+            flash("Student not found.")
+            return redirect(url_for("student_page"))
+
+        if request.method == "POST":
+            values = [
+                request.form.get("admission_no", "").strip(),
+                request.form.get("name", "").strip(),
+                request.form.get("class_name", "").strip(),
+                request.form.get("roll_no", "").strip()
+            ]
+            if not all(values):
+                flash("Please fill in every field.")
+            else:
+                try:
+                    conn.execute("""
+                        UPDATE students
+                        SET admission_no=%s, name=%s, class_name=%s, roll_no=%s
+                        WHERE id=%s
+                    """, (*values, student_id))
+                    flash("Student updated successfully.")
+                    return redirect(url_for("student_page"))
+                except psycopg.errors.UniqueViolation:
+                    flash("Admission number already exists.")
+
+    template = """
+    <section class="panel"><h2>Edit Student</h2>
+    <form method="post">
+      <label>Admission Number<input name="admission_no" value="{{ s.admission_no }}" required></label>
+      <label>Name<input name="name" value="{{ s.name }}" required></label>
+      <label>Class<input name="class_name" value="{{ s.class_name }}" required></label>
+      <label>Roll Number<input name="roll_no" value="{{ s.roll_no }}" required></label>
+      <button type="submit">Update Student</button>
+      <a class="link" href="/students">Cancel</a>
+    </form></section>
+    """
+    return page("Edit Student", template, s=student)
+
+
+@app.route("/students/<int:student_id>/delete", methods=["POST"])
+def delete_student(student_id):
+    with get_db() as conn:
+        conn.execute("DELETE FROM students WHERE id=%s", (student_id,))
+    flash("Student deleted. Their marks were also deleted.")
+    return redirect(url_for("student_page"))
 
 
 @app.route("/exams", methods=["GET", "POST"])
@@ -240,3 +379,4 @@ init_db()
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
+
