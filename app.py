@@ -52,7 +52,7 @@ def home():
     </head>
     <body>
         <header>
-            <h1>Ayush Gupta</h1>
+            <h1>JINDAL PUBLIC SCHOOL</h1>
             <p>Examination Management System</p>
             <p>Manage students, exams and results in one place</p>
         </header>
